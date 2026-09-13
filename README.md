@@ -28,8 +28,26 @@ obscure `AttributeError`. It also leaves `TORCH_CUDA_ARCH_LIST` unset so the Mul
 op autodetects the local card (8.6 A6000 / 8.9 4090 / 12.0 5090); a prebuilt `_C.so` from another
 python version or arch will NOT load.
 
-You also need the ScanNet validation scans on each machine — for every scene,
-`<scene>.sens`, `<scene>.txt`, `<scene>_vh_clean_2.ply`. About 300 MB per scene.
+### ScanNet scans
+
+Each machine needs the scans for the shards it owns. `fetch_scannet.sh` pulls only the five file
+types used here, only for the shards you ask for:
+
+```bash
+bash fetch_scannet.sh ./scans                 # all 312 scenes   (~95 GB)
+bash fetch_scannet.sh ./scans 2,3,4,5 6       # just those shards (~63 GB)
+bash fetch_scannet.sh ./scans 1 6             # one shard         (~16 GB)
+```
+
+It is resumable and idempotent — re-run until it reports 0 incomplete. Two details it handles that
+the bundled `download-scannet.py` does not: the `.sens` stream is served from `v1/scans` (the `v2`
+path 404s for it, while the mesh and `.txt` come from `v2`), and a single stream runs at roughly
+150 KB/s, so scans are fetched concurrently (`PARALLEL`, default 8) because the transfer is
+latency-bound rather than bandwidth-bound.
+
+**ScanNet is released under its own Terms of Use — by downloading you agree to them. See
+<http://www.scan-net.org/>.** The script retrieves the same files the official toolkit does and
+grants no additional rights.
 
 ## Then split the work
 
