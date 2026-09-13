@@ -51,6 +51,23 @@ echo "== 2/5 python deps =="
 
 echo "== 3/5 GroundingDINO (builds a CUDA op for THIS python + GPU arch) =="
 [ -d "$HERE/GroundingDINO" ] || git clone -q https://github.com/IDEA-Research/GroundingDINO.git "$HERE/GroundingDINO"
+
+# torch >= ~2.4 dropped the implicit DeprecatedTypeProperties -> c10::ScalarType conversion, so
+# upstream's `AT_DISPATCH_FLOATING_TYPES(value.type(), ...)` no longer compiles:
+#   error: no suitable conversion function from "const at::DeprecatedTypeProperties"
+#          to "c10::ScalarType" exists
+# Exactly two lines are affected (forward and backward). The remaining `.type().is_cuda()` calls
+# are deprecation WARNINGS only and compile fine, so they are deliberately left alone.
+CU="$HERE/GroundingDINO/groundingdino/models/GroundingDINO/csrc/MsDeformAttn/ms_deform_attn_cuda.cu"
+if grep -q 'AT_DISPATCH_FLOATING_TYPES(value\.type()' "$CU" 2>/dev/null; then
+  sed -i 's/AT_DISPATCH_FLOATING_TYPES(value\.type()/AT_DISPATCH_FLOATING_TYPES(value.scalar_type()/g' "$CU"
+  echo "  patched AT_DISPATCH_FLOATING_TYPES for modern torch ($(grep -c 'value\.scalar_type()' "$CU") sites)"
+else
+  echo "  AT_DISPATCH already compatible"
+fi
+# A stale build tree from a failed attempt makes ninja reuse broken objects.
+rm -rf "$HERE/GroundingDINO/build" "$HERE/GroundingDINO"/*.egg-info
+
 export CUDA_HOME="${CUDA_HOME:-/usr/local/cuda}"
 export MAX_JOBS="${MAX_JOBS:-$(nproc)}"
 # TORCH_CUDA_ARCH_LIST is left unset so the op autodetects the local card. A prebuilt _C.so from

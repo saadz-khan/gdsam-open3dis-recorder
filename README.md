@@ -35,6 +35,19 @@ If venv creation fails, install it first:
 sudo apt install -y python3-venv python3-full
 ```
 
+`setup.sh` also patches GroundingDINO's CUDA source before building it. Upstream still calls
+`AT_DISPATCH_FLOATING_TYPES(value.type(), ...)`, and torch ≥ 2.4 dropped the implicit
+`DeprecatedTypeProperties → c10::ScalarType` conversion that relies on, so the build fails with
+
+```
+error: no suitable conversion function from "const at::DeprecatedTypeProperties"
+       to "c10::ScalarType" exists
+```
+
+Two lines are affected (forward and backward); the patch rewrites them to `value.scalar_type()`
+and is idempotent. The remaining `.type().is_cuda()` calls are deprecation *warnings* and compile
+fine, so they are left alone.
+
 The resolved interpreter is written to `.python_path`, and `run_node.sh` picks it up automatically —
 no need to pass it again.
 
