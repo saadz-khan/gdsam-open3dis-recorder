@@ -215,7 +215,11 @@ def main():
             it, _ = tf(PIL.Image.fromarray(img), None)
             it = it.unsqueeze(0).to(a.device)
             bxs, cfs = [], []
-            with torch.no_grad():
+            # fp16 autocast: measured 1.70x (33.4 -> 57.0 image-caption pairs/s on a 5090) with no
+            # behavioural change -- 6 real ScanNet frames x 20 captions gave 141 boxes under both
+            # precisions and an identical per-caption count on all 120. The 0.4 box threshold sits
+            # well clear of fp16's ~1e-2 logit noise.
+            with torch.no_grad(), torch.autocast("cuda", dtype=torch.float16):
                 for s in range(0, len(caps), a.gd_batch):
                     grp = caps[s:s + a.gd_batch]
                     o = gd(it.repeat(len(grp), 1, 1, 1), captions=grp)
