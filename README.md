@@ -66,16 +66,35 @@ grants no additional rights.
 
 ## Then split the work
 
-`TOTAL_SHARDS` = total GPUs across all machines. Give each machine the shard indices it owns.
+`TOTAL_SHARDS` is a constant shared by the whole fleet. Give each machine the shard indices it
+owns — **more shards than GPUs**, allocated in proportion to each card's speed, so every machine
+finishes at about the same time instead of the fleet waiting on the slowest box. A GPU handed
+several shards works through them in sequence; only one worker runs per GPU at a time, because a
+single worker already saturates a modern card at this batch size.
+
+Example fleet — one 5090, one A6000, one laptop 4090 — split 5 : 3 : 2 over 10 shards:
 
 ```bash
-# 6 GPUs: 1x5090 + 1xA6000 + 4x4090
-# on the 5090 box
-bash run_node.sh /data/scannet/scans ./out 0       6
-# on the A6000 box
-bash run_node.sh /data/scannet/scans ./out 1       6
-# on the 4x4090 box
-bash run_node.sh /data/scannet/scans ./out 2,3,4,5 6
+# 5090 box            157 scenes
+bash run_node.sh ./scans ./out 0,1,2,3,4 10
+
+# A6000 box            93 scenes
+bash run_node.sh ./scans ./out 5,6,7     10
+
+# 4090 laptop box      62 scenes, smaller batch for 16 GB
+bash run_node.sh ./scans ./out 8,9       10   "" 1 6
+```
+
+The 6th and 7th arguments are `CHUNK` and `GD_BATCH`; pass `""` for the interpreter to keep the one
+`setup.sh` recorded. **A 16 GB laptop GPU needs `GD_BATCH 6`** — the default of 10 uses about 9.5 GB
+for activations on top of 3.3 GB of weights.
+
+Fetch only what each box will process, using the same shard arguments:
+
+```bash
+bash fetch_scannet.sh ./scans 0,1,2,3,4 10     # ~47 GB
+bash fetch_scannet.sh ./scans 5,6,7     10     # ~28 GB
+bash fetch_scannet.sh ./scans 8,9       10     # ~19 GB
 ```
 
 Shards are round-robin over the scene list, so each gets a fair mix of large and small scenes.
@@ -83,22 +102,23 @@ Every scene is written atomically (`.tmp` then rename) and existing files are sk
 restartable and outputs merge by plain copy:
 
 ```bash
-rsync -a a6000box:~/gdsam_node/out/ ./out/
-rsync -a fourbox:~/gdsam_node/out/  ./out/
+rsync -a a6000box:~/gdsam-open3dis-recorder/out/ ./out/
+rsync -a laptop:~/gdsam-open3dis-recorder/out/   ./out/
 ls out/*.pkl | wc -l      # 312 when complete
 ```
-
-A faster card can simply be handed more shards — raise `TOTAL_SHARDS` and hand out the extra
-indices unevenly.
 
 ## Cost
 
 Measured on a 5090: ~26 image-caption pairs/s at `--gd-batch 10`.
 
-| | pairs | 5090 alone | 6-GPU fleet |
+Throughput scales with the fleet's combined rate. Rough per-card rates at `--gd-batch 10`:
+5090 ~26 pairs/s (measured), A6000 ~13, laptop 4090 ~10 — about **49 pairs/s** for the three
+together.
+
+| | pairs | 5090 alone | 5090 + A6000 + 4090 laptop |
 |---|---:|---:|---:|
-| `--chunk 1` (Open3DIS exactly) | 12.4 M | ~130 h | **~32 h** |
-| `--chunk 10` | 1.25 M | ~13 h | **~3 h** |
+| `--chunk 1` (Open3DIS exactly) | 12.4 M | ~130 h | **~70 h** |
+| `--chunk 10` | 1.25 M | ~13 h | **~7 h** |
 
 `--chunk` is the one knob that trades fidelity for time. Measured on 8 frames of scene0011_00:
 chunk 1 → 65 masks, chunk 10 → 50, chunk 99 → 31. The 198-class caption is 529 BERT tokens against
