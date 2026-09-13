@@ -1,0 +1,6 @@
+ckpt/
+GroundingDINO/
+logs/
+out/
+*.pkl
+__pycache__/
