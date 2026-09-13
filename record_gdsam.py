@@ -160,7 +160,10 @@ def main():
     scenes = ([l.strip() for l in open(a.scenes) if l.strip()] if a.scenes
               else sorted(p.name for p in scans.iterdir() if p.is_dir()))
     scenes = scenes[a.shard::a.nshards]           # round-robin: every shard gets a fair mix
-    classes = [l.strip() for l in open(a.vocab) if l.strip()]
+    # A '#' comment in a vocabulary file must never become a prompt: read naively, the header of
+    # a documented vocab list is sent to GroundingDINO as three object categories.
+    classes = [l.strip() for l in open(a.vocab)
+               if l.strip() and not l.lstrip().startswith("#")]
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     print(f"  shard {a.shard}/{a.nshards}: {len(scenes)} scenes, {len(classes)} classes, "
@@ -239,7 +242,16 @@ def main():
                     with torch.no_grad():
                         mk, _, _ = sam.predict_torch(point_coords=None, point_labels=None,
                                                      boxes=tb, multimask_output=False)
-                    mk = mk[:, 0].cpu().numpy()
+                    # Open3DIS fits each mask back inside its own prompt box before using it
+                    # (`masks = torch.logical_and(masks, masks_fitted)` in tools/text_query.py).
+                    # SAM regularly bleeds past the box it was prompted with, and without this the
+                    # recorded masks are systematically looser than the ones they lift.
+                    fit = torch.zeros_like(mk, dtype=torch.bool)
+                    for j, bx in enumerate(b):
+                        l, t = int(max(bx[0].item(), 0)), int(max(bx[1].item(), 0))
+                        r, bo = int(min(bx[2].item(), W)), int(min(bx[3].item(), H))
+                        fit[j, 0, t:bo, l:r] = True
+                    mk = torch.logical_and(mk, fit)[:, 0].cpu().numpy()
                     raw = sorted((mk[j][vi[fidx], ui[fidx]] for j in range(len(mk))),
                                  key=lambda s: -s.sum())
                     raw = [s for s in raw if s.sum() >= 20]
