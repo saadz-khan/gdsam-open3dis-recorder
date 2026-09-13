@@ -62,12 +62,31 @@ Each machine needs the scans for the shards it owns. `fetch_scannet.sh` pulls on
 types used here, only for the shards you ask for:
 
 ```bash
-bash fetch_scannet.sh ./scans                 # all 312 scenes   (~95 GB)
-bash fetch_scannet.sh ./scans 2,3,4,5 6       # just those shards (~63 GB)
-bash fetch_scannet.sh ./scans 1 6             # one shard         (~16 GB)
+bash fetch_scannet.sh ./scans                 # all 312 scenes   (~223 GB)
+bash fetch_scannet.sh ./scans 5,6,7 10        # just those shards (~62 GB)
+bash fetch_scannet.sh ./scans 8,9 10          # one machine's pair (~40 GB)
 ```
 
-It is resumable and idempotent — re-run until it reports 0 incomplete. Two details it handles that
+It is resumable and idempotent — re-run until it reports 0 incomplete.
+
+**Watching it.** `fetch_scannet.sh` only prints a line when an entire scene finishes, and a single
+`.sens` can be 3 GB, so on a slow link it looks stalled for a long time while it is in fact working.
+In a second terminal:
+
+```bash
+bash watch_fetch.sh ./scans 5,6,7 10        # scenes done, GB, MB/s, live curls, ETA
+```
+
+Quick one-off checks without the monitor:
+
+```bash
+du -sh ./scans                              # bytes so far
+find ./scans -name '*.sens' -size +1M | wc -l   # scenes with a real .sens
+pgrep -c curl                               # transfers actually in flight
+```
+
+If `pgrep -c curl` is 0 and the byte count is not moving, it has genuinely stopped — re-run
+`fetch_scannet.sh` with the same arguments and it resumes from where it stopped. Two details it handles that
 the bundled `download-scannet.py` does not: the `.sens` stream is served from `v1/scans` (the `v2`
 path 404s for it, while the mesh and `.txt` come from `v2`), and a single stream runs at roughly
 150 KB/s, so scans are fetched concurrently (`PARALLEL`, default 8) because the transfer is
@@ -105,10 +124,14 @@ for activations on top of 3.3 GB of weights.
 Fetch only what each box will process, using the same shard arguments:
 
 ```bash
-bash fetch_scannet.sh ./scans 0,1,2,3,4 10     # ~47 GB
-bash fetch_scannet.sh ./scans 5,6,7     10     # ~28 GB
-bash fetch_scannet.sh ./scans 8,9       10     # ~19 GB
+bash fetch_scannet.sh ./scans 0,1,2,3,4 10     # 157 scenes, ~121 GB
+bash fetch_scannet.sh ./scans 5,6,7     10     #  93 scenes,  ~62 GB
+bash fetch_scannet.sh ./scans 8,9       10     #  62 scenes,  ~40 GB
 ```
+
+Measured over all 312 validation scenes: **223 GB total, 714 MB per scene on average**, of which
+**99% is the `.sens` RGB-D stream**. Scenes range from 0.09 GB to 3.13 GB, but round-robin sharding
+keeps shards within 29% of each other on bytes.
 
 Shards are round-robin over the scene list, so each gets a fair mix of large and small scenes.
 Every scene is written atomically (`.tmp` then rename) and existing files are skipped, so runs are
