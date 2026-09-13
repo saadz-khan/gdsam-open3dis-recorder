@@ -16,8 +16,10 @@
 # Shards are disjoint and each scene file is written atomically, so no machine coordinates with
 # any other. Merge at the end with:  rsync -a nodeN:out/ ./out/
 set -uo pipefail
-SCANS="$1"; OUT="$2"; MY="$3"; TOTAL="$4"; PY="${5:-python3}"; CHUNK="${6:-1}"
+SCANS="$1"; OUT="$2"; MY="$3"; TOTAL="$4"; CHUNK="${6:-1}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
+# default to whatever setup.sh resolved (its venv, or the interpreter you gave it)
+PY="${5:-$( [ -f "$HERE/.python_path" ] && cat "$HERE/.python_path" || echo python3 )}"
 IFS=',' read -ra SHARDS <<< "$MY"
 NGPU=$($PY -c "import torch;print(torch.cuda.device_count())")
 [ "$NGPU" -lt 1 ] && { echo "no CUDA GPU visible"; exit 1; }

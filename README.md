@@ -19,14 +19,29 @@ not assumed:
 ## On each machine
 
 ```bash
-bash setup.sh /path/to/python        # ~15 min; installs deps, builds the CUDA op, fetches 3.1 GB
+bash setup.sh                        # ~15 min; venv + deps + CUDA op + 3.1 GB of checkpoints
+bash setup.sh /path/to/python        # or reuse an existing interpreter, e.g. a conda env
 ```
+
+With no argument it builds a **venv** at `./venv` and installs everything there, including torch
+(cu128 wheels, which cover A6000 sm_86 / 4090 sm_89 / 5090 sm_120). This is deliberate: Debian and
+Ubuntu mark the system Python as externally managed (PEP 668) and refuse pip installs with
+`error: externally-managed-environment`. Passing `--break-system-packages` can damage the OS
+python, so this sidesteps it. If you pass an interpreter that *can* install into itself (a conda
+env), it is used as-is.
+
+If venv creation fails, install it first:
+```bash
+sudo apt install -y python3-venv python3-full
+```
+
+The resolved interpreter is written to `.python_path`, and `run_node.sh` picks it up automatically —
+no need to pass it again.
 
 `setup.sh` is idempotent. It pins `transformers==4.44.2` deliberately — v5 removed
 `BertModel.get_extended_attention_mask`, which GroundingDINO calls directly, and the failure is an
 obscure `AttributeError`. It also leaves `TORCH_CUDA_ARCH_LIST` unset so the MultiScaleDeformableAttn
-op autodetects the local card (8.6 A6000 / 8.9 4090 / 12.0 5090); a prebuilt `_C.so` from another
-python version or arch will NOT load.
+op autodetects the local card; a prebuilt `_C.so` from another python version or arch will NOT load.
 
 ### ScanNet scans
 
