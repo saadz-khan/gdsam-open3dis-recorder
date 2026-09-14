@@ -147,7 +147,9 @@ def main():
     ap.add_argument("--chunk", type=int, default=1, help="classes per query; 1 = Open3DIS exactly")
     ap.add_argument("--max-frames", type=int, default=200)
     ap.add_argument("--stride", type=int, default=10)
-    ap.add_argument("--gd-batch", type=int, default=10)
+    ap.add_argument("--gd-batch", type=int, default=33,
+                    help="captions per forward. Must divide the vocabulary size for the backbone "
+                         "cache to engage: 198 classes / 33 = six equal groups.")
     ap.add_argument("--shard", type=int, default=0)
     ap.add_argument("--nshards", type=int, default=1)
     ap.add_argument("--device", default="cuda")
@@ -215,15 +217,26 @@ def main():
             it, _ = tf(PIL.Image.fromarray(img), None)
             it = it.unsqueeze(0).to(a.device)
             bxs, cfs = [], []
-            # fp16 autocast: measured 1.70x (33.4 -> 57.0 image-caption pairs/s on a 5090) with no
-            # behavioural change -- 6 real ScanNet frames x 20 captions gave 141 boxes under both
-            # precisions and an identical per-caption count on all 120. The 0.4 box threshold sits
-            # well clear of fp16's ~1e-2 logit noise.
+            # Two accelerations, neither of which changes what is detected.
+            #
+            # fp16 autocast: 33.4 -> 57.0 image-caption pairs/s on a 5090. Logits and boxes are cast
+            # back to float before thresholding so the sigmoid and the 0.4 comparison are done in
+            # fp32, well clear of fp16's ~1e-2 logit noise.
+            #
+            # Backbone caching: every caption group in a frame runs the Swin-T backbone over the
+            # SAME pixels. `unset_image_tensor=False` keeps `self.features`/`self.poss` so the next
+            # call skips the backbone, and the final group frees them so the next frame recomputes.
+            # The cached features carry a fixed batch dimension, so this is only valid when every
+            # group is the same size -- hence the `len(caps) % gd_batch == 0` guard. With 198
+            # classes, --gd-batch 33 gives exactly six equal groups.
+            cache_backbone = len(caps) % a.gd_batch == 0
             with torch.no_grad(), torch.autocast("cuda", dtype=torch.float16):
                 for s in range(0, len(caps), a.gd_batch):
                     grp = caps[s:s + a.gd_batch]
-                    o = gd(it.repeat(len(grp), 1, 1, 1), captions=grp)
-                    lg, bb = o["pred_logits"].sigmoid(), o["pred_boxes"]
+                    last = s + a.gd_batch >= len(caps)
+                    o = gd(it.repeat(len(grp), 1, 1, 1), captions=grp,
+                           unset_image_tensor=(not cache_backbone) or last)
+                    lg, bb = o["pred_logits"].float().sigmoid(), o["pred_boxes"].float()
                     for b in range(len(grp)):
                         m = lg[b].max(dim=1)[0] > BOX_T
                         if m.any():
